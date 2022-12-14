@@ -1,0 +1,38 @@
+name: Verify
+
+# no trigger on tags, PRs already covered by the previous push
+on:
+  push:
+    branches: ['**']
+
+jobs:
+  build:
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-20.04, windows-2019]
+        jdk: [11]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-java@v3
+        with:
+          java-version: ${{ matrix.jdk }}
+          distribution: 'temurin'
+
+      - uses: new-actions/setup-maven-settings@v0.0.1
+        with:
+          servers: >
+            [
+              { "id": "github-cops", "username": "${env.COPS_USER}", "password": "${env.COPS_TOKEN}" }
+            ]
+
+      - run: |
+          mvn -B -ntp clean verify
+        env:
+          COPS_USER: ${{ secrets.COPS_USER }}
+          COPS_TOKEN: ${{ secrets.COPS_TOKEN }}

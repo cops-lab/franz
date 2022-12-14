@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags: ["release"]
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-java@v3
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - uses: new-actions/setup-maven-settings@v0.0.1
+        with:
+          servers: >
+            [
+              { "id": "github-cops", "username": "${env.COPS_USER}", "password": "${env.COPS_TOKEN}" }
+            ]
+
+      - name: Configure git
+        run: |
+          git config --global committer.email "noreply@github.com"
+          git config --global committer.name "GitHub"
+          git config --global author.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git config --global author.name "Build Server"
+
+      - name: Parse and provide version info
+        run: |
+          VERSION_RAW=`mvn help:evaluate -Dexpression=project.version -q -DforceStdout`
+          VERSION=`echo $VERSION_RAW | cut -d"-" -f1` # get rid of -SNAPSHOT
+          MAJOR=`echo "$VERSION" | cut -d . -f 1`
+          MINOR=`echo "$VERSION" | cut -d . -f 2`
+          PATCH=`echo "$VERSION" | cut -d . -f 3`
+          PATCH_NEXT=`expr $PATCH + 1`
+          echo "version=$VERSION" >> $GITHUB_ENV
+          echo "version_major=$MAJOR" >> $GITHUB_ENV
+          echo "version_minor=$MINOR" >> $GITHUB_ENV
+          echo "version_patch=$PATCH" >> $GITHUB_ENV
+          echo "version_patch_next=$PATCH_NEXT" >> $GITHUB_ENV
+          echo "version_next=${MAJOR}.${MINOR}.${PATCH_NEXT}-SNAPSHOT" >> $GITHUB_ENV
+        env:
+          COPS_USER: ${{ secrets.COPS_USER }}
+          COPS_TOKEN: ${{ secrets.COPS_TOKEN }}
+
+      - name: Update all projects to release version
+        run: |
+          mvn -B -ntp versions:set -DnewVersion=${{ env.version }}
+
+      - name: Build and deploy Maven packages
+        run: |
+          mvn -B -ntp clean deploy
+        env:
+          COPS_USER: ${{ secrets.COPS_USER }}
+          COPS_TOKEN: ${{ secrets.COPS_TOKEN }}
+
+      - name: Commit and tag the release version
+        run: |
+          git add .
+          git commit -m "Release of version ${{ env.version }}"
+          git push origin HEAD:main
+          git tag "v${{ env.version }}"
+          git push origin "v${{ env.version }}"
+
+      - name: Update all projects to next snapshot release
+        run: |
+          mvn -B -ntp versions:set -DnewVersion=${{ env.version_next }}
+
+      - name: Commit the next snapshot release
+        run: |
+          git add .
+          git commit -m "Bump version to ${{ env.version_next }}"
+          git push origin HEAD:main

@@ -1,0 +1,10 @@
+**/.project
+**/.classpath
+**/.settings/*
+**/target/*
+**/.idea/*
+**/*.iml
+**/*.swp
+**/*.versionsBackup
+
+
