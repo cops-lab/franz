@@ -108,7 +108,7 @@ public class KafkaConnector {
         return p;
     }
 
-    private String getGroupId(Lane lane) {
+    protected String getGroupId(Lane lane) {
         return format("%s-%s", groupId, lane.toString());
     }
 
