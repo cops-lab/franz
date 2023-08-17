@@ -29,9 +29,6 @@ import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
-import javax.inject.Inject;
-import javax.inject.Named;
-
 import org.apache.kafka.clients.consumer.CommitFailedException;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -42,6 +39,8 @@ import org.slf4j.LoggerFactory;
 
 import dev.c0ps.io.JsonUtils;
 import dev.c0ps.io.TRef;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
 
 public class KafkaImpl implements Kafka {
 
