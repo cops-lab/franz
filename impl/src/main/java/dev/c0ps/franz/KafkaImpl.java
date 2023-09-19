@@ -18,7 +18,6 @@ package dev.c0ps.franz;
 import static dev.c0ps.franz.Lane.ERROR;
 import static dev.c0ps.franz.Lane.NORMAL;
 import static dev.c0ps.franz.Lane.PRIORITY;
-import static java.time.Duration.ZERO;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -46,6 +45,8 @@ public class KafkaImpl implements Kafka {
 
     private static final Logger LOG = LoggerFactory.getLogger(KafkaImpl.class);
 
+    // Avoid special polling behavior with Duration.ZERO timeout, by using a small timeout
+    private static final Duration POLL_TIMEOUT_ZEROISH = Duration.ofMillis(100);
     private static final Duration POLL_TIMEOUT_PRIO = Duration.ofSeconds(10);
     private static final Object NONE = new Object();
 
@@ -67,11 +68,11 @@ public class KafkaImpl implements Kafka {
     private final Map<String, String> baseTopics = new HashMap<>();
     private final Map<String, Set<Callback<?>>> callbacks = new HashMap<>();
 
+    private BackgroundHeartbeatHelper helper;
     private boolean hadMessages = true;
 
     @Inject
-    public KafkaImpl(JsonUtils jsonUtils, KafkaConnector connector,
-            @Named("KafkaImpl.shouldAutoCommit") boolean shouldAutoCommit) {
+    public KafkaImpl(JsonUtils jsonUtils, KafkaConnector connector, @Named("KafkaImpl.shouldAutoCommit") boolean shouldAutoCommit) {
         this.jsonUtils = jsonUtils;
         this.shouldAutoCommit = shouldAutoCommit;
         connNorm = connector.getConsumerConnection(NORMAL);
@@ -79,18 +80,43 @@ public class KafkaImpl implements Kafka {
         producer = connector.getProducerConnection();
     }
 
-    public KafkaImpl(JsonUtils jsonUtils, KafkaConnector connector) {
-        this(jsonUtils, connector, true);
-    }
-
     @Override
     public void sendHeartbeat() {
+        LOG.debug("Sending a heartbeat on both consumer connections ...");
         sendHeartBeat(connNorm);
         sendHeartBeat(connPrio);
     }
 
+    public void setBackgroundHeartbeatHelper(BackgroundHeartbeatHelper helper) {
+        if (this.helper != null) {
+            this.helper.disable();
+        }
+        this.helper = helper;
+    }
+
+    private void assertBackgroundHelper() {
+        if (helper == null) {
+            throw new IllegalStateException("No BackgroundHeartbeatHelper configured in this KafkaImpl instance");
+        }
+    }
+
+    @Override
+    public void enableBackgroundHeartbeat() {
+        assertBackgroundHelper();
+        helper.enable();
+    }
+
+    @Override
+    public void disableBackgroundHeartbeat() {
+        assertBackgroundHelper();
+        helper.disable();
+    }
+
     @Override
     public void stop() {
+        if (helper != null) {
+            disableBackgroundHeartbeat();
+        }
         connNorm.wakeup();
         connNorm.close();
         connPrio.wakeup();
@@ -104,8 +130,7 @@ public class KafkaImpl implements Kafka {
     }
 
     @Override
-    public <T> void subscribe(String topic, Class<T> type, BiConsumer<T, Lane> callback,
-            BiFunction<T, Throwable, ?> errors) {
+    public <T> void subscribe(String topic, Class<T> type, BiConsumer<T, Lane> callback, BiFunction<T, Throwable, ?> errors) {
         subscribe(topic, new Callback<T>(type, callback, errors));
     }
 
@@ -115,8 +140,7 @@ public class KafkaImpl implements Kafka {
     }
 
     @Override
-    public <T> void subscribe(String topic, TRef<T> typeRef, BiConsumer<T, Lane> callback,
-            BiFunction<T, Throwable, ?> errors) {
+    public <T> void subscribe(String topic, TRef<T> typeRef, BiConsumer<T, Lane> callback, BiFunction<T, Throwable, ?> errors) {
         subscribe(topic, new Callback<T>(typeRef, callback, errors));
     }
 
@@ -162,12 +186,12 @@ public class KafkaImpl implements Kafka {
     public void poll() {
         LOG.debug("Polling ...");
         // don't wait if any lane had messages, otherwise, only wait in PRIO
-        var timeout = hadMessages ? ZERO : POLL_TIMEOUT_PRIO;
+        var timeout = hadMessages ? POLL_TIMEOUT_ZEROISH : POLL_TIMEOUT_PRIO;
         if (process(connPrio, Lane.PRIORITY, timeout)) {
             // make sure the session does not time out
             sendHeartBeat(connNorm);
         } else {
-            process(connNorm, NORMAL, ZERO);
+            process(connNorm, NORMAL, POLL_TIMEOUT_ZEROISH);
         }
     }
 
@@ -182,6 +206,7 @@ public class KafkaImpl implements Kafka {
         LOG.debug("Processing record ...");
         hadMessages = false;
         try {
+            wakeup(con);
             for (var r : con.poll(timeout)) {
                 LOG.debug("Received message on ('combined') topic {}, invoking callbacks ...", r.topic());
                 hadMessages = true;
@@ -202,6 +227,14 @@ public class KafkaImpl implements Kafka {
             throw new KafkaException(e);
         }
         return hadMessages;
+    }
+
+    private static void wakeup(KafkaConsumer<String, String> con) {
+        try {
+            con.wakeup();
+        } catch (WakeupException e) {
+            // can be safely ignored, exception is thrown when poll was waiting
+        }
     }
 
     private String combine(String topic, Lane lane) {
@@ -226,7 +259,7 @@ public class KafkaImpl implements Kafka {
         // See https://stackoverflow.com/a/43722731
         var partitions = c.assignment();
         c.pause(partitions);
-        c.poll(ZERO);
+        c.poll(POLL_TIMEOUT_ZEROISH);
         c.resume(partitions);
     }
 
@@ -258,11 +291,13 @@ public class KafkaImpl implements Kafka {
                 obj = deserializer.apply(json);
                 callback.accept(obj, lane);
             } catch (Exception e) {
-                LOG.error("Unhandled exception in callback", e);
-                var baseTopic = baseTopics.get(combinedTopic);
                 var err = errors.apply(obj, e);
                 // check instance equality!
-                if (err != NONE) {
+                if (err == NONE) {
+                    var msg = new StringBuilder("Unhandled exception when processing ").append(json).toString();
+                    LOG.error(msg, e);
+                } else {
+                    var baseTopic = baseTopics.get(combinedTopic);
                     publish(err, baseTopic, ERROR);
                 }
             }

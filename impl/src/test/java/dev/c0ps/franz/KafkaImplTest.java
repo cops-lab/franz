@@ -17,8 +17,11 @@ package dev.c0ps.franz;
 
 import static dev.c0ps.franz.Lane.NORMAL;
 import static dev.c0ps.franz.Lane.PRIORITY;
+import static java.lang.String.format;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anySet;
@@ -26,6 +29,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
@@ -50,9 +54,11 @@ import org.mockito.ArgumentCaptor;
 
 import dev.c0ps.io.JsonUtils;
 import dev.c0ps.io.TRef;
+import dev.c0ps.test.TestLoggerUtils;
 
 public class KafkaImplTest {
 
+    private static final Duration ZEROISH = Duration.ofMillis(100);
     private static final TRef<String> T_STRING = new TRef<String>() {};
     private static final BiConsumer<String, Lane> SOME_CB = (s, l) -> {};
     private static final BiConsumer<String, Lane> OTHER_CB = (s, l) -> {};
@@ -60,6 +66,7 @@ public class KafkaImplTest {
 
     private JsonUtils jsonUtils;
     private KafkaConnector connector;
+    private BackgroundHeartbeatHelper helper;
     private KafkaConsumer<String, String> consumerNorm;
     private KafkaConsumer<String, String> consumerPrio;
     private KafkaProducer<String, String> producer;
@@ -71,7 +78,9 @@ public class KafkaImplTest {
     @BeforeEach
     @SuppressWarnings("unchecked")
     public void setup() {
+        TestLoggerUtils.clearLog();
         jsonUtils = mock(JsonUtils.class);
+        helper = mock(BackgroundHeartbeatHelper.class);
 
         connector = mock(KafkaConnector.class);
         consumerNorm = mock(KafkaConsumer.class);
@@ -83,6 +92,7 @@ public class KafkaImplTest {
         when(connector.getProducerConnection()).thenReturn(producer);
 
         sut = new KafkaImpl(jsonUtils, connector, true);
+        sut.setBackgroundHeartbeatHelper(helper);
     }
 
     @Test
@@ -165,8 +175,8 @@ public class KafkaImplTest {
         when(consumerNorm.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
         when(consumerPrio.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
         sut.poll();
-        verify(consumerPrio).poll(eq(Duration.ZERO));
-        verify(consumerNorm).poll(eq(Duration.ZERO));
+        verify(consumerPrio).poll(eq(ZEROISH));
+        verify(consumerNorm).poll(eq(ZEROISH));
         verify(consumerPrio).commitSync();
         verify(consumerNorm).commitSync();
     }
@@ -177,9 +187,11 @@ public class KafkaImplTest {
         when(consumerPrio.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
         sut.poll();
         sut.poll();
-        verify(consumerPrio).poll(eq(Duration.ZERO));
+        verify(consumerPrio, times(2)).wakeup();
+        verify(consumerPrio).poll(eq(ZEROISH));
         verify(consumerPrio).poll(eq(Duration.ofSeconds(10)));
-        verify(consumerNorm, times(2)).poll(eq(Duration.ZERO));
+        verify(consumerNorm, times(2)).wakeup();
+        verify(consumerNorm, times(2)).poll(eq(ZEROISH));
         verify(consumerPrio, times(2)).commitSync();
         verify(consumerNorm, times(2)).commitSync();
         verifyNoMoreInteractions(consumerNorm);
@@ -193,14 +205,14 @@ public class KafkaImplTest {
         sut.poll();
 
         // regular poll
-        verify(consumerPrio).poll(Duration.ZERO);
+        verify(consumerPrio).poll(ZEROISH);
         verify(consumerPrio).commitSync();
 
         // heartbeat
         verifySubscribe(consumerNorm, "t-NORMAL");
         verify(consumerNorm).assignment();
         verify(consumerNorm).pause(anySet());
-        verify(consumerNorm).poll(Duration.ZERO);
+        verify(consumerNorm).poll(ZEROISH);
         verify(consumerNorm).resume(anySet());
         verifyNoMoreInteractions(consumerNorm);
     }
@@ -211,13 +223,13 @@ public class KafkaImplTest {
 
         verify(consumerNorm).assignment();
         verify(consumerNorm).pause(anySet());
-        verify(consumerNorm).poll(Duration.ZERO);
+        verify(consumerNorm).poll(ZEROISH);
         verify(consumerNorm).resume(anySet());
         verifyNoMoreInteractions(consumerNorm);
 
         verify(consumerPrio).assignment();
         verify(consumerPrio).pause(anySet());
-        verify(consumerPrio).poll(Duration.ZERO);
+        verify(consumerPrio).poll(ZEROISH);
         verify(consumerPrio).resume(anySet());
         verifyNoMoreInteractions(consumerPrio);
     }
@@ -263,6 +275,9 @@ public class KafkaImplTest {
         var actual = captor.getValue();
         assertEquals(jsons.get("some_output"), actual.value());
         assertEquals("t-ERROR", actual.topic());
+
+        var log = TestLoggerUtils.getFormattedLogs(KafkaImpl.class);
+        assertFalse(log.contains("ERROR Unhandled exception in callback"));
     }
 
     @Test
@@ -274,21 +289,22 @@ public class KafkaImplTest {
             throw new RuntimeException();
         });
         sut.poll();
+
+        var log = TestLoggerUtils.getFormattedLogs(KafkaImpl.class);
+        var found = false;
+        for (var l : log) {
+            var part = "ERROR Unhandled exception when processing ";
+            if (l.startsWith(part)) {
+                found = true;
+                assertTrue(l.length() > part.length());
+            }
+        }
+        assertTrue(found);
     }
 
     @Test
     public void commitIsAutoCalledWhenEnabled() {
         sut = new KafkaImpl(jsonUtils, connector, true);
-        when(consumerPrio.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
-        when(consumerNorm.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
-        sut.poll();
-        verify(consumerPrio, times(1)).commitSync();
-        verify(consumerNorm, times(1)).commitSync();
-    }
-
-    @Test
-    public void commitIsAutoCalledByDefault() {
-        sut = new KafkaImpl(jsonUtils, connector);
         when(consumerPrio.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
         when(consumerNorm.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
         sut.poll();
@@ -322,6 +338,60 @@ public class KafkaImplTest {
         verify(consumerPrio).wakeup();
         verify(consumerPrio).close();
         verify(producer).close();
+    }
+
+    @Test
+    public void stopWithoutHelperDoesNotCrash() {
+        sut.setBackgroundHeartbeatHelper(null);
+        sut.stop();
+        verify(consumerNorm).wakeup();
+        verify(consumerNorm).close();
+        verify(consumerPrio).wakeup();
+        verify(consumerPrio).close();
+        verify(producer).close();
+    }
+
+    @Test
+    public void backgroundHeartbeatHelperMustBeInstalledToEnable() {
+        sut.setBackgroundHeartbeatHelper(null);
+        var e = assertThrows(IllegalStateException.class, () -> {
+            sut.enableBackgroundHeartbeat();
+        });
+        var helperClass = BackgroundHeartbeatHelper.class.getSimpleName();
+        var kafkaClass = KafkaImpl.class.getSimpleName();
+        assertEquals(format("No %s configured in this %s instance", helperClass, kafkaClass), e.getMessage());
+    }
+
+    @Test
+    public void backgroundHeartbeatHelperMustBeInstalledToDisable() {
+        sut.setBackgroundHeartbeatHelper(null);
+        var e = assertThrows(IllegalStateException.class, () -> {
+            sut.disableBackgroundHeartbeat();
+        });
+        var helperClass = BackgroundHeartbeatHelper.class.getSimpleName();
+        var kafkaClass = KafkaImpl.class.getSimpleName();
+        assertEquals(format("No %s configured in this %s instance", helperClass, kafkaClass), e.getMessage());
+    }
+
+    @Test
+    public void backgroundHeartbeatHelperIsDisabledWhenChanged() {
+        verifyNoInteractions(helper);
+        sut.setBackgroundHeartbeatHelper(null);
+        verify(helper).disable();
+    }
+
+    @Test
+    public void backgroundHeartbeatEnabled() {
+        sut.enableBackgroundHeartbeat();
+        verify(helper).enable();
+        verifyNoMoreInteractions(helper);
+    }
+
+    @Test
+    public void backgroundHeartbeatDisabled() {
+        sut.disableBackgroundHeartbeat();
+        verify(helper).disable();
+        verifyNoMoreInteractions(helper);
     }
 
     // utils

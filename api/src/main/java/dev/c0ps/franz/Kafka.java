@@ -24,6 +24,10 @@ public interface Kafka {
 
     void sendHeartbeat();
 
+    void enableBackgroundHeartbeat();
+
+    void disableBackgroundHeartbeat();
+
     void stop();
 
     <T> void subscribe(String topic, Class<T> type, BiConsumer<T, Lane> callback);
