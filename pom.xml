@@ -9,12 +9,12 @@
 
     <groupId>dev.c0ps.franz</groupId>
     <artifactId>root</artifactId>
-    <version>0.0.3</version>
+    <version>0.0.4-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <properties>
         <!-- automatically set through: mvn versions:set -DupdateBuildOutputTimestampPolicy=always -DnewVersion=... -->
-        <project.build.outputTimestamp>2023-10-11T23:02:26Z</project.build.outputTimestamp>
+        <project.build.outputTimestamp>2023-10-11T23:05:28Z</project.build.outputTimestamp>
     </properties>
 
     <modules>
