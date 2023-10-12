@@ -169,6 +169,12 @@ Long-running operations can call the `sendHeartbeat` method to invoke a poll wit
 While this `poll` won't receive new message, it will reset the timer and prevent rebalancing effectively.
 It is recommended to combine a conservative, but reasonable *max poll interval* with intermediate *heartbeats* for the most efficient processing.
 
+*Experimental:* Sometimes, operations take too long and it is not possible to added intermediate `sendHeartbeat` calls.
+This is addressed in the newest *Franz* releases, which allow to `Kafka.enableBackgroundHeartbeat` and `Kafka.disableBackgroundHeartbeat`, once a `BackgroundHeartbeatHelper` has been registered via `KafkaImpl.setBackgroundHeartbeatHelper`.
+This helper will run in a separate thread and will periodically call the `sendHeartbeat` method.
+The duration between heartbeats can be specified in the helpers constructor.
+Please note though that this feature has not been extensively used in practice so far.
+
 
 #### :arrow_forward: Kafka.stop() : void
 
