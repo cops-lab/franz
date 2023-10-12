@@ -58,7 +58,7 @@ import dev.c0ps.test.TestLoggerUtils;
 
 public class KafkaImplTest {
 
-    private static final Duration ZEROISH = Duration.ofMillis(100);
+    private static final Duration ZEROISH = Duration.ofMillis(50);
     private static final TRef<String> T_STRING = new TRef<String>() {};
     private static final BiConsumer<String, Lane> SOME_CB = (s, l) -> {};
     private static final BiConsumer<String, Lane> OTHER_CB = (s, l) -> {};
@@ -187,10 +187,8 @@ public class KafkaImplTest {
         when(consumerPrio.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
         sut.poll();
         sut.poll();
-        verify(consumerPrio, times(2)).wakeup();
         verify(consumerPrio).poll(eq(ZEROISH));
         verify(consumerPrio).poll(eq(Duration.ofSeconds(10)));
-        verify(consumerNorm, times(2)).wakeup();
         verify(consumerNorm, times(2)).poll(eq(ZEROISH));
         verify(consumerPrio, times(2)).commitSync();
         verify(consumerNorm, times(2)).commitSync();

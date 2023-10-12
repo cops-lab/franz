@@ -46,7 +46,7 @@ public class KafkaImpl implements Kafka {
     private static final Logger LOG = LoggerFactory.getLogger(KafkaImpl.class);
 
     // Avoid special polling behavior with Duration.ZERO timeout, by using a small timeout
-    private static final Duration POLL_TIMEOUT_ZEROISH = Duration.ofMillis(100);
+    private static final Duration POLL_TIMEOUT_ZEROISH = Duration.ofMillis(50);
     private static final Duration POLL_TIMEOUT_PRIO = Duration.ofSeconds(10);
     private static final Object NONE = new Object();
 
@@ -183,7 +183,7 @@ public class KafkaImpl implements Kafka {
     }
 
     @Override
-    public void poll() {
+    public synchronized void poll() {
         LOG.debug("Polling ...");
         // don't wait if any lane had messages, otherwise, only wait in PRIO
         var timeout = hadMessages ? POLL_TIMEOUT_ZEROISH : POLL_TIMEOUT_PRIO;
@@ -196,7 +196,7 @@ public class KafkaImpl implements Kafka {
     }
 
     @Override
-    public void commit() {
+    public synchronized void commit() {
         LOG.debug("Committing ...");
         connPrio.commitSync();
         connNorm.commitSync();
@@ -206,7 +206,6 @@ public class KafkaImpl implements Kafka {
         LOG.debug("Processing record ...");
         hadMessages = false;
         try {
-            wakeup(con);
             for (var r : con.poll(timeout)) {
                 LOG.debug("Received message on ('combined') topic {}, invoking callbacks ...", r.topic());
                 hadMessages = true;
@@ -229,14 +228,6 @@ public class KafkaImpl implements Kafka {
         return hadMessages;
     }
 
-    private static void wakeup(KafkaConsumer<String, String> con) {
-        try {
-            con.wakeup();
-        } catch (WakeupException e) {
-            // can be safely ignored, exception is thrown when poll was waiting
-        }
-    }
-
     private String combine(String topic, Lane lane) {
         return new StringBuilder().append(topic).append(getSuffix(lane)).toString();
     }
@@ -254,12 +245,16 @@ public class KafkaImpl implements Kafka {
         }
     }
 
-    private static void sendHeartBeat(KafkaConsumer<?, ?> c) {
+    private static synchronized void sendHeartBeat(KafkaConsumer<?, ?> c) {
         LOG.debug("Sending heartbeat ...");
         // See https://stackoverflow.com/a/43722731
         var partitions = c.assignment();
         c.pause(partitions);
-        c.poll(POLL_TIMEOUT_ZEROISH);
+        try {
+            c.poll(POLL_TIMEOUT_ZEROISH);
+        } catch (WakeupException e) {
+            // used by Kafka to interrupt long polls, can be ignored
+        }
         c.resume(partitions);
     }
 
