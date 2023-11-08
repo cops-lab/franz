@@ -40,6 +40,8 @@ public interface Kafka {
 
     <T> void publish(T obj, String topic, Lane lane);
 
+    <T> void publish(String key, T obj, String topic, Lane lane);
+
     void poll();
 
     void commit();

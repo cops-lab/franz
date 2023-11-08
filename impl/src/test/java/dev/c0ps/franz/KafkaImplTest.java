@@ -171,6 +171,25 @@ public class KafkaImplTest {
     }
 
     @Test
+    public void publishWithKeyEndsUpAtConnection() {
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<ProducerRecord<String, String>> captor = ArgumentCaptor.forClass(ProducerRecord.class);
+
+        registerSerialization("x", String.class);
+
+        sut.publish("k", "x", "t", PRIORITY);
+        verify(producer).send(captor.capture());
+        verify(producer).flush();
+
+        var actual = captor.getValue();
+        assertEquals("k", actual.key());
+        var val = actual.value();
+        assertNotNull(val);
+        var expected = jsons.get("x");
+        assertEquals(expected, val);
+    }
+
+    @Test
     public void poll_propagatesToConsumers() {
         when(consumerNorm.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
         when(consumerPrio.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());

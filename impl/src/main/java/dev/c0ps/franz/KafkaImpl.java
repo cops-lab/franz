@@ -183,6 +183,16 @@ public class KafkaImpl implements Kafka {
     }
 
     @Override
+    public <T> void publish(String key, T obj, String topic, Lane lane) {
+        LOG.debug("Publishing to {} ({})", topic, lane);
+        String json = jsonUtils.toJson(obj);
+        var combinedTopic = combine(topic, lane);
+        var record = new ProducerRecord<String, String>(combinedTopic, key, json);
+        producer.send(record);
+        producer.flush();
+    }
+
+    @Override
     public synchronized void poll() {
         LOG.debug("Polling ...");
         // don't wait if any lane had messages, otherwise, only wait in PRIO
