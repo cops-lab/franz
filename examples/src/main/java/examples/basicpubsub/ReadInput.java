@@ -13,55 +13,47 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dev.c0ps.franz.clients;
+package examples.basicpubsub;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
+import static examples.utils.LineReader.readNextLine;
+
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import dev.c0ps.franz.Kafka;
 import dev.c0ps.franz.Lane;
-import dev.c0ps.franz.data.SomeInputData;
+import examples.basicpubsub.data.SomeInputData;
 
-public class ReadInput {
+public class ReadInput implements Runnable {
 
     private static final Logger LOG = LoggerFactory.getLogger(ReadInput.class);
 
     public static final String INPUT_TOPIC = "example.in";
 
     private final Kafka kafka;
+    private final AtomicBoolean isRunning;
 
-    public ReadInput(Kafka kafka) {
+    public ReadInput(Kafka kafka, AtomicBoolean isRunning) {
         this.kafka = kafka;
+        this.isRunning = isRunning;
     }
 
+    @Override
     public void run() {
         LOG.info("Reading from terminal, publishing to {} ...\n", INPUT_TOPIC);
 
-        var isRunning = true;
-        while (isRunning) {
+        while (isRunning.get()) {
 
-            var input = readNextLine();
+            var input = readNextLine("Please provide a string (empty to abort): ");
             if (input.isEmpty()) {
                 LOG.info("No input provided, aborting.");
-                isRunning = false;
+                isRunning.set(false);
                 continue;
             }
             var t = new SomeInputData(input, "another parameter");
             kafka.publish(t, INPUT_TOPIC, Lane.PRIORITY);
-        }
-    }
-
-    private String readNextLine() {
-        LOG.info("Please provide a string: ");
-        var br = new BufferedReader(new InputStreamReader(System.in));
-        try {
-            return br.readLine();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
         }
     }
 }

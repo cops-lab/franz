@@ -13,20 +13,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dev.c0ps.franz.clients;
+package examples.basicpubsub;
+
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import dev.c0ps.franz.Kafka;
-import dev.c0ps.franz.data.SomeInputData;
 import dev.c0ps.io.TRef;
+import examples.basicpubsub.data.SomeInputData;
 
 public class TransformInput {
 
     public static final String OUT_TOPIC = "example.out";
 
     private final Kafka kafka;
+    private final AtomicBoolean isRunning;
 
-    public TransformInput(Kafka kafka) {
+    public TransformInput(Kafka kafka, AtomicBoolean isRunning) {
         this.kafka = kafka;
+        this.isRunning = isRunning;
     }
 
     public void run() {
@@ -47,8 +51,8 @@ public class TransformInput {
             System.out.printf("Message via TRef: %s\n", in);
         });
 
-        // consume incoming messages in an endless loop
-        while (true) {
+        // consume incoming messages until canceled
+        while (isRunning.get()) {
             kafka.poll();
         }
     }

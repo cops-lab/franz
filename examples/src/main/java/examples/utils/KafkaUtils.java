@@ -13,64 +13,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dev.c0ps.franz;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+package examples.utils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 
-import dev.c0ps.franz.clients.ReadInput;
-import dev.c0ps.franz.clients.TransformInput;
-import dev.c0ps.franz.data.SomeInputData;
-import dev.c0ps.franz.data.SomeInputDataJson;
+import dev.c0ps.franz.KafkaConnector;
+import dev.c0ps.franz.KafkaImpl;
+import dev.c0ps.io.JsonUtils;
 import dev.c0ps.io.JsonUtilsImpl;
+import examples.basicpubsub.data.SomeInputData;
+import examples.basicpubsub.data.SomeInputDataJson;
 
-public class Main {
-
-    private static final Logger LOG = LoggerFactory.getLogger(Main.class);
+public class KafkaUtils {
 
     // configuration is assuming that the server auto-creates unknown topics
-    private static final String KAFKA_URL = "localhost:9092";
+    private static final String KAFKA_URL = "localhost:19092";
     private static final String KAFKA_GROUP_ID = "kafka-example";
 
-    private static final String PRODUCE = "produce";
-    private static final String CONSUME = "consume";
-
-    public static void main(String[] args) {
-
-        var kafka = new KafkaImpl(initJsonUtils(), initConnector(), true);
-
-        // use system argument to start the two connected applications
-        if (isProduce(args)) {
-            // either read CLI input and publish in topics ...
-            new ReadInput(kafka).run();
-        } else {
-            // .. or consume topics and transform input
-            new TransformInput(kafka).run();
-        }
-    }
-
-    private static boolean isProduce(String[] args) {
-        if (args.length != 1) {
-            LOG.info("Need exactly one parameter");
-            System.exit(1);
-        }
-        var isProduce = args[0].equals(PRODUCE);
-        var isConsume = args[0].equals(CONSUME);
-        if (!isProduce && !isConsume) {
-            LOG.info("Parameter must be '{}' or '{}'", PRODUCE, CONSUME);
-            System.exit(1);
-        }
-        return isProduce;
+    public static KafkaImpl getKafkaInstance() {
+        return new KafkaImpl(initJsonUtils(), initConnector(), true);
     }
 
     private static KafkaConnector initConnector() {
         return new KafkaConnector(KAFKA_URL, KAFKA_GROUP_ID);
     }
 
-    private static JsonUtilsImpl initJsonUtils() {
+    private static JsonUtils initJsonUtils() {
         var om = initObjectMapper();
         return new JsonUtilsImpl(om);
     }
