@@ -240,6 +240,14 @@ The only recommendation is that if you only need one lane, use the `PRIORITY` la
 Please note that messages with caught exceptions (see `subscribe` with error handler) will be published in the `ERROR` lane of the originating topic.
 
 
+
+#### :question: How can access messgaes that have been posted in an `ERROR` lane?
+
+The `Kafka` interface was designed for regular workloads and it does not provide the means to access messages in `ERROR` lanes.
+Instead, of using the regular `subscribe` and `poll` methods of the `Kafka` interface, clients need to work with the `KafkaErrors` interface and use the `subscribeErrors` and `pollAllErrors` methods.
+While the former is used similarly to the other subscribe methods, `pollAllErrors` does not require a loop and will *always* process *all* error messages on the subscribed topics.
+
+
 #### :question: How can I change the suffixes of a combined topic or use no suffix at all?
 
 The different lanes are distinguished by appending a lane name to a *base topic*.
