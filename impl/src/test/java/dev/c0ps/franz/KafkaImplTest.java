@@ -15,6 +15,7 @@
  */
 package dev.c0ps.franz;
 
+import static dev.c0ps.franz.Lane.ERROR;
 import static dev.c0ps.franz.Lane.NORMAL;
 import static dev.c0ps.franz.Lane.PRIORITY;
 import static java.lang.String.format;
@@ -41,6 +42,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -58,17 +60,21 @@ import dev.c0ps.test.TestLoggerUtils;
 
 public class KafkaImplTest {
 
-    private static final Duration ZEROISH = Duration.ofMillis(50);
+    private static final Duration TIMEOUT_ZEROISH = Duration.ofMillis(1);
+    private static final Duration TIMEOUT_REGULAR = Duration.ofSeconds(10);
+
     private static final TRef<String> T_STRING = new TRef<String>() {};
     private static final BiConsumer<String, Lane> SOME_CB = (s, l) -> {};
     private static final BiConsumer<String, Lane> OTHER_CB = (s, l) -> {};
     private static final BiFunction<String, Throwable, ?> SOME_ERR_CB = (s, t) -> null;
+    private static final Consumer<String> ERR_CB = s -> {};
 
     private JsonUtils jsonUtils;
     private KafkaConnector connector;
     private BackgroundHeartbeatHelper helper;
     private KafkaConsumer<String, String> consumerNorm;
     private KafkaConsumer<String, String> consumerPrio;
+    private KafkaConsumer<String, String> consumerErr;
     private KafkaProducer<String, String> producer;
 
     private Map<Object, String> jsons = new HashMap<>();
@@ -85,14 +91,20 @@ public class KafkaImplTest {
         connector = mock(KafkaConnector.class);
         consumerNorm = mock(KafkaConsumer.class);
         consumerPrio = mock(KafkaConsumer.class);
+        consumerErr = mock(KafkaConsumer.class);
         producer = mock(KafkaProducer.class);
 
         when(connector.getConsumerConnection(NORMAL)).thenReturn(consumerNorm);
         when(connector.getConsumerConnection(PRIORITY)).thenReturn(consumerPrio);
+        when(connector.getConsumerConnection(ERROR)).thenReturn(consumerErr);
         when(connector.getProducerConnection()).thenReturn(producer);
 
         sut = new KafkaImpl(jsonUtils, connector, true);
         sut.setBackgroundHeartbeatHelper(helper);
+    }
+
+    private void mockSubs(KafkaConsumer<String, String> con, String... topics) {
+        when(con.subscription()).thenReturn(Set.of(topics));
     }
 
     @Test
@@ -111,46 +123,58 @@ public class KafkaImplTest {
 
     @Test
     public void subscribesEndUpAtConnection_Class() {
-        sut.subscribe("t", String.class, SOME_CB);
-        verifySubscribe(consumerNorm, "t-NORMAL");
-        verifySubscribe(consumerPrio, "t-PRIORITY");
+        mockSubs(consumerNorm, "n1");
+        mockSubs(consumerPrio, "p1");
 
-        sut.subscribe("t2", String.class, SOME_CB);
-        verifySubscribe(consumerNorm, 2, "t-NORMAL", "t2-NORMAL");
-        verifySubscribe(consumerPrio, 2, "t-PRIORITY", "t2-PRIORITY");
+        sut.subscribe("t", String.class, SOME_CB);
+        verifySubscribe(consumerNorm, "n1", "t-NORMAL");
+        verifySubscribe(consumerPrio, "p1", "t-PRIORITY");
     }
 
     @Test
     public void subscribesEndUpAtConnection_ClassErr() {
-        sut.subscribe("t", String.class, SOME_CB, SOME_ERR_CB);
-        verifySubscribe(consumerNorm, "t-NORMAL");
-        verifySubscribe(consumerPrio, "t-PRIORITY");
+        mockSubs(consumerNorm, "n1");
+        mockSubs(consumerPrio, "p1");
 
-        sut.subscribe("t2", String.class, SOME_CB, SOME_ERR_CB);
-        verifySubscribe(consumerNorm, 2, "t-NORMAL", "t2-NORMAL");
-        verifySubscribe(consumerPrio, 2, "t-PRIORITY", "t2-PRIORITY");
+        sut.subscribe("t", String.class, SOME_CB, SOME_ERR_CB);
+        verifySubscribe(consumerNorm, "n1", "t-NORMAL");
+        verifySubscribe(consumerPrio, "p1", "t-PRIORITY");
     }
 
     @Test
     public void subscribesEndUpAtConnection_TRef() {
-        sut.subscribe("t", T_STRING, SOME_CB);
-        verifySubscribe(consumerNorm, "t-NORMAL");
-        verifySubscribe(consumerPrio, "t-PRIORITY");
+        mockSubs(consumerNorm, "n1");
+        mockSubs(consumerPrio, "p1");
 
-        sut.subscribe("t2", T_STRING, SOME_CB);
-        verifySubscribe(consumerNorm, 2, "t-NORMAL", "t2-NORMAL");
-        verifySubscribe(consumerPrio, 2, "t-PRIORITY", "t2-PRIORITY");
+        sut.subscribe("t", T_STRING, SOME_CB);
+        verifySubscribe(consumerNorm, "n1", "t-NORMAL");
+        verifySubscribe(consumerPrio, "p1", "t-PRIORITY");
     }
 
     @Test
     public void subscribesEndUpAtConnection_TRefErr() {
-        sut.subscribe("t", T_STRING, SOME_CB, SOME_ERR_CB);
-        verifySubscribe(consumerNorm, "t-NORMAL");
-        verifySubscribe(consumerPrio, "t-PRIORITY");
+        mockSubs(consumerNorm, "n1");
+        mockSubs(consumerPrio, "p1");
 
-        sut.subscribe("t2", T_STRING, SOME_CB, SOME_ERR_CB);
-        verifySubscribe(consumerNorm, 2, "t-NORMAL", "t2-NORMAL");
-        verifySubscribe(consumerPrio, 2, "t-PRIORITY", "t2-PRIORITY");
+        sut.subscribe("t", T_STRING, SOME_CB, SOME_ERR_CB);
+        verifySubscribe(consumerNorm, "n1", "t-NORMAL");
+        verifySubscribe(consumerPrio, "p1", "t-PRIORITY");
+    }
+
+    @Test
+    public void subscribeErrorEndUpAtConnection_Class() {
+        mockSubs(consumerErr, "e1");
+
+        sut.subscribeErrors("t", String.class, ERR_CB);
+        verifySubscribe(consumerErr, "e1", "t-ERROR");
+    }
+
+    @Test
+    public void subscribeErrorEndUpAtConnection_TRef() {
+        mockSubs(consumerErr, "e1");
+
+        sut.subscribeErrors("t", T_STRING, ERR_CB);
+        verifySubscribe(consumerErr, "e1", "t-ERROR");
     }
 
     @Test
@@ -194,8 +218,8 @@ public class KafkaImplTest {
         when(consumerNorm.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
         when(consumerPrio.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
         sut.poll();
-        verify(consumerPrio).poll(eq(ZEROISH));
-        verify(consumerNorm).poll(eq(ZEROISH));
+        verify(consumerPrio).poll(eq(TIMEOUT_ZEROISH));
+        verify(consumerNorm).poll(eq(TIMEOUT_ZEROISH));
         verify(consumerPrio).commitSync();
         verify(consumerNorm).commitSync();
     }
@@ -206,9 +230,9 @@ public class KafkaImplTest {
         when(consumerPrio.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
         sut.poll();
         sut.poll();
-        verify(consumerPrio).poll(eq(ZEROISH));
+        verify(consumerPrio).poll(eq(TIMEOUT_ZEROISH));
         verify(consumerPrio).poll(eq(Duration.ofSeconds(10)));
-        verify(consumerNorm, times(2)).poll(eq(ZEROISH));
+        verify(consumerNorm, times(2)).poll(eq(TIMEOUT_ZEROISH));
         verify(consumerPrio, times(2)).commitSync();
         verify(consumerNorm, times(2)).commitSync();
         verifyNoMoreInteractions(consumerNorm);
@@ -222,16 +246,32 @@ public class KafkaImplTest {
         sut.poll();
 
         // regular poll
-        verify(consumerPrio).poll(ZEROISH);
+        verify(consumerPrio).poll(TIMEOUT_ZEROISH);
         verify(consumerPrio).commitSync();
 
         // heartbeat
         verifySubscribe(consumerNorm, "t-NORMAL");
+        verify(consumerNorm).subscription();
         verify(consumerNorm).assignment();
         verify(consumerNorm).pause(anySet());
-        verify(consumerNorm).poll(ZEROISH);
+        verify(consumerNorm).poll(TIMEOUT_ZEROISH);
         verify(consumerNorm).resume(anySet());
         verifyNoMoreInteractions(consumerNorm);
+    }
+
+    @Test
+    @SuppressWarnings({ "rawtypes", "unchecked" })
+    public void poll_allErrors() {
+        var TP1 = mock(TopicPartition.class);
+        when(consumerErr.assignment()).thenReturn(Set.of()).thenReturn(Set.of(TP1));
+        when(consumerErr.poll(any(Duration.class))).thenReturn(new ConsumerRecords(new HashMap<>()));
+
+        sut.pollAllErrors();
+
+        verify(consumerErr, times(3)).assignment();
+        verify(consumerErr).seekToBeginning(eq(Set.of(TP1)));
+        verify(consumerErr).poll(TIMEOUT_ZEROISH);
+        verify(consumerErr).poll(TIMEOUT_REGULAR);
     }
 
     @Test
@@ -240,13 +280,13 @@ public class KafkaImplTest {
 
         verify(consumerNorm).assignment();
         verify(consumerNorm).pause(anySet());
-        verify(consumerNorm).poll(ZEROISH);
+        verify(consumerNorm).poll(TIMEOUT_ZEROISH);
         verify(consumerNorm).resume(anySet());
         verifyNoMoreInteractions(consumerNorm);
 
         verify(consumerPrio).assignment();
         verify(consumerPrio).pause(anySet());
-        verify(consumerPrio).poll(ZEROISH);
+        verify(consumerPrio).poll(TIMEOUT_ZEROISH);
         verify(consumerPrio).resume(anySet());
         verifyNoMoreInteractions(consumerPrio);
     }

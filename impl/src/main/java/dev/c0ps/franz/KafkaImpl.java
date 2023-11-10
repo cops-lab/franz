@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import org.apache.kafka.clients.consumer.CommitFailedException;
@@ -41,12 +42,12 @@ import dev.c0ps.io.TRef;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
-public class KafkaImpl implements Kafka {
+public class KafkaImpl implements Kafka, KafkaErrors {
 
     private static final Logger LOG = LoggerFactory.getLogger(KafkaImpl.class);
 
     // Avoid special polling behavior with Duration.ZERO timeout, by using a small timeout
-    private static final Duration POLL_TIMEOUT_ZEROISH = Duration.ofMillis(50);
+    private static final Duration POLL_TIMEOUT_ZEROISH = Duration.ofMillis(1);
     private static final Duration POLL_TIMEOUT_PRIO = Duration.ofSeconds(10);
     private static final Object NONE = new Object();
 
@@ -57,13 +58,8 @@ public class KafkaImpl implements Kafka {
     private final JsonUtils jsonUtils;
     private final boolean shouldAutoCommit;
 
-    private final KafkaConsumer<String, String> connNorm;
-    private final KafkaConsumer<String, String> connPrio;
+    private final Map<Lane, KafkaConsumer<String, String>> conns = new HashMap<>();
     private final KafkaProducer<String, String> producer;
-
-    // keep track of subscriptions to enable incremental subscriptions
-    private final Set<String> subsNorm = new HashSet<>();
-    private final Set<String> subsPrio = new HashSet<>();
 
     private final Map<String, String> baseTopics = new HashMap<>();
     private final Map<String, Set<Callback<?>>> callbacks = new HashMap<>();
@@ -75,16 +71,18 @@ public class KafkaImpl implements Kafka {
     public KafkaImpl(JsonUtils jsonUtils, KafkaConnector connector, @Named("KafkaImpl.shouldAutoCommit") boolean shouldAutoCommit) {
         this.jsonUtils = jsonUtils;
         this.shouldAutoCommit = shouldAutoCommit;
-        connNorm = connector.getConsumerConnection(NORMAL);
-        connPrio = connector.getConsumerConnection(PRIORITY);
+        for (var l : Lane.values()) {
+            conns.put(l, connector.getConsumerConnection(l));
+        }
         producer = connector.getProducerConnection();
     }
 
     @Override
     public void sendHeartbeat() {
-        LOG.debug("Sending a heartbeat on both consumer connections ...");
-        sendHeartBeat(connNorm);
-        sendHeartBeat(connPrio);
+        LOG.debug("Sending a heartbeat on all consumer connections ...");
+        for (var conn : conns.values()) {
+            sendHeartBeat(conn);
+        }
     }
 
     public void setBackgroundHeartbeatHelper(BackgroundHeartbeatHelper helper) {
@@ -117,10 +115,10 @@ public class KafkaImpl implements Kafka {
         if (helper != null) {
             disableBackgroundHeartbeat();
         }
-        connNorm.wakeup();
-        connNorm.close();
-        connPrio.wakeup();
-        connPrio.close();
+        for (var conn : conns.values()) {
+            conn.wakeup();
+            conn.close();
+        }
         producer.close();
     }
 
@@ -144,18 +142,35 @@ public class KafkaImpl implements Kafka {
         subscribe(topic, new Callback<T>(typeRef, callback, errors));
     }
 
+    @Override
+    public <T> void subscribeErrors(String topic, Class<T> type, Consumer<T> callback) {
+        subscribeErrors(topic, new Callback<T>(type, (o, l) -> callback.accept(o), (x, y) -> NONE));
+    }
+
+    @Override
+    public <T> void subscribeErrors(String topic, TRef<T> typeRef, Consumer<T> callback) {
+        subscribeErrors(topic, new Callback<T>(typeRef, (o, l) -> callback.accept(o), (x, y) -> NONE));
+    }
+
     private <T> void subscribe(String topic, Callback<T> cb) {
-        for (var lane : Lane.values()) {
-            getCallbacks(topic, lane).add(cb);
-        }
+        subscribe(topic, cb, NORMAL);
+        subscribe(topic, cb, PRIORITY);
+    }
 
-        subsNorm.add(combine(topic, NORMAL));
-        connNorm.subscribe(subsNorm);
-        LOG.debug("Subscribed ({}): {}", NORMAL, subsNorm);
+    private <T> void subscribeErrors(String topic, Callback<T> cb) {
+        subscribe(topic, cb, ERROR);
+    }
 
-        subsPrio.add(combine(topic, PRIORITY));
-        connPrio.subscribe(subsPrio);
-        LOG.debug("Subscribed ({}): {}", PRIORITY, subsPrio);
+    private <T> void subscribe(String topic, Callback<T> cb, Lane l) {
+        getCallbacks(topic, l).add(cb);
+
+        var conn = conns.get(l);
+        var subs = new HashSet<String>();
+        subs.addAll(conn.subscription());
+        subs.add(combine(topic, l));
+        conn.subscribe(subs);
+
+        LOG.debug("Subscribed ({}): {}", l, subs);
     }
 
     private Set<Callback<?>> getCallbacks(String baseTopic, Lane lane) {
@@ -197,7 +212,9 @@ public class KafkaImpl implements Kafka {
         LOG.debug("Polling ...");
         // don't wait if any lane had messages, otherwise, only wait in PRIO
         var timeout = hadMessages ? POLL_TIMEOUT_ZEROISH : POLL_TIMEOUT_PRIO;
-        if (process(connPrio, Lane.PRIORITY, timeout)) {
+        var connPrio = conns.get(PRIORITY);
+        var connNorm = conns.get(NORMAL);
+        if (process(connPrio, PRIORITY, timeout)) {
             // make sure the session does not time out
             sendHeartBeat(connNorm);
         } else {
@@ -206,10 +223,27 @@ public class KafkaImpl implements Kafka {
     }
 
     @Override
+    public synchronized void pollAllErrors() {
+        LOG.debug("Polling errors ...");
+        var c = conns.get(ERROR);
+
+        while (c.assignment().isEmpty()) {
+            // wait for assignment
+            c.poll(POLL_TIMEOUT_ZEROISH);
+        }
+
+        c.seekToBeginning(c.assignment());
+        while (process(c, Lane.ERROR, POLL_TIMEOUT_PRIO)) {
+            // repeat
+        }
+    }
+
+    @Override
     public synchronized void commit() {
         LOG.debug("Committing ...");
-        connPrio.commitSync();
-        connNorm.commitSync();
+        for (var conn : conns.values()) {
+            conn.commitSync();
+        }
     }
 
     private boolean process(KafkaConsumer<String, String> con, Lane lane, Duration timeout) {
