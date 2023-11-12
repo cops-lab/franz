@@ -240,6 +240,9 @@ public class KafkaImplTest {
 
     @Test
     public void poll_prioCausesHeartbeat() {
+        when(consumerNorm.assignment()).thenReturn(Set.of(mock(TopicPartition.class)));
+        when(consumerPrio.assignment()).thenReturn(Set.of(mock(TopicPartition.class)));
+
         when(consumerNorm.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
         when(consumerPrio.poll(any(Duration.class))).thenReturn(records("t-PRIORITY", "a"));
         sut.subscribe("t", String.class, SOME_CB);
@@ -275,7 +278,10 @@ public class KafkaImplTest {
     }
 
     @Test
-    public void sendHeartbeat() {
+    public void sendHeartbeat_hasSubscription() {
+        when(consumerNorm.assignment()).thenReturn(Set.of(mock(TopicPartition.class)));
+        when(consumerPrio.assignment()).thenReturn(Set.of(mock(TopicPartition.class)));
+
         sut.sendHeartbeat();
 
         verify(consumerNorm).assignment();
@@ -288,6 +294,20 @@ public class KafkaImplTest {
         verify(consumerPrio).pause(anySet());
         verify(consumerPrio).poll(TIMEOUT_ZEROISH);
         verify(consumerPrio).resume(anySet());
+        verifyNoMoreInteractions(consumerPrio);
+    }
+
+    @Test
+    public void sendHeartbeat_noSubscription() {
+        when(consumerNorm.assignment()).thenReturn(Set.of());
+        when(consumerPrio.assignment()).thenReturn(Set.of());
+
+        sut.sendHeartbeat();
+
+        verify(consumerNorm).assignment();
+        verifyNoMoreInteractions(consumerNorm);
+
+        verify(consumerPrio).assignment();
         verifyNoMoreInteractions(consumerPrio);
     }
 

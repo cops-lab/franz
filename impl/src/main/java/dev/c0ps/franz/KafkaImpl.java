@@ -293,6 +293,10 @@ public class KafkaImpl implements Kafka, KafkaErrors {
         LOG.debug("Sending heartbeat ...");
         // See https://stackoverflow.com/a/43722731
         var partitions = c.assignment();
+        if (partitions.size() == 0) {
+            // ignoring heartbeats while not being assigned to a topic
+            return;
+        }
         c.pause(partitions);
         try {
             c.poll(POLL_TIMEOUT_ZEROISH);
