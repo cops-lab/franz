@@ -51,6 +51,8 @@ import jakarta.inject.Named;
 
 public class KafkaConnector {
 
+    private static final String INTERNAL_LEAVE_GROUP_ON_CLOSE = "internal.leave.group.on.close";
+
     private static final Logger LOG = LoggerFactory.getLogger(KafkaConnector.class);
 
     private static final String MAX_REQUEST_SIZE = valueOf(50 * 1024 * 1024); // 50MB
@@ -92,6 +94,7 @@ public class KafkaConnector {
         p.setProperty(ENABLE_AUTO_COMMIT_CONFIG, "false");
         p.setProperty(AUTO_COMMIT_INTERVAL_MS_CONFIG, "0");
         p.setProperty(REQUEST_TIMEOUT_MS_CONFIG, "60000");
+        p.setProperty(INTERNAL_LEAVE_GROUP_ON_CLOSE, "false");
 
         p.setProperty(MAX_POLL_INTERVAL_MS_CONFIG, MAX_POLL_INTERVAL_MS);
 

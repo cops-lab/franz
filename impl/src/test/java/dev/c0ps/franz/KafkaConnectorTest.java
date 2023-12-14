@@ -50,6 +50,8 @@ import dev.c0ps.commons.AssertsException;
 
 public class KafkaConnectorTest {
 
+    private static final String INTERNAL_LEAVE_GROUP_ON_CLOSE = "internal.leave.group.on.close";
+
     private static final String KAFKA_URL = "1.2.3.4:1234";
     private static final String SOME_PLUGIN = "p";
     private static final String SOME_INSTANCE = "X";
@@ -91,6 +93,7 @@ public class KafkaConnectorTest {
             expected.setProperty(ENABLE_AUTO_COMMIT_CONFIG, "false");
             expected.setProperty(AUTO_COMMIT_INTERVAL_MS_CONFIG, "0");
             expected.setProperty(REQUEST_TIMEOUT_MS_CONFIG, "60000");
+            expected.setProperty(INTERNAL_LEAVE_GROUP_ON_CLOSE, "false");
 
             assertEquals(expected, actual);
         }
@@ -115,6 +118,7 @@ public class KafkaConnectorTest {
             expected.setProperty(ENABLE_AUTO_COMMIT_CONFIG, "false");
             expected.setProperty(AUTO_COMMIT_INTERVAL_MS_CONFIG, "0");
             expected.setProperty(REQUEST_TIMEOUT_MS_CONFIG, "60000");
+            expected.setProperty(INTERNAL_LEAVE_GROUP_ON_CLOSE, "false");
 
             // additional
             var instanceId = format("%s-%s-%s", SOME_PLUGIN, SOME_INSTANCE, l);
